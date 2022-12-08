@@ -1,5 +1,5 @@
 # circleci-demo-auto-promotion
-Demo of automatic promotion to higher environments.
+Demo of automatic promotion to higher environments.  This doesn't actually do a serious deployment but simply demonstrates a pipeline structure.
 
 ## Requirements
 
