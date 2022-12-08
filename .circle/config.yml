@@ -1,0 +1,110 @@
+version: 2.1
+
+parameters:
+  app_name:           # Determines which microservice will be deployed
+    type: string 
+    default: default
+  release:            # Determines which version of the microservice will be deployed
+    type: string
+    default: default
+  environment:        # Determines the environment in which to deploy
+    type: string
+    default: dev
+  no_promotion:       # Determines whether or not to promote to the next environment
+    type: boolean
+    default: false
+
+orbs: 
+  aws-cli: circleci/aws-cli@3.1.1
+
+jobs:
+  setup-aws-cli:
+    executor: aws-cli/default
+    steps:
+      - checkout
+      - aws-cli/setup:
+          profile-name: default
+          role-arn: "arn:aws:iam::660990364978:role/jennings-oidc-demo"
+          role-session-name: example-session
+      - run: aws sts get-caller-identity #example AWS command
+      
+  run-deployment:
+    docker:
+      - image: cimg/node:18.4.0
+    steps:
+      - checkout
+      - run: node --version #demonstrate node is installed
+      - run: 
+          command: |
+            cat \<< EOF
+            Deploying with the following params:
+            
+            App name: << pipeline.parameters.app_name >>
+            Release: << pipeline.parameters.release >>
+            Build number: << pipeline.number >>
+            Branch: << pipeline.git.branch >>
+            Environment: << pipeline.parameters.environment >>
+            Artifact S3 bucket: ${S3_BUCKET}
+            EOF
+  promote:
+    docker:
+      - image: cimg/base:2022.06
+    steps:
+      - run:
+          name: Determine next environment and trigger pipeline
+          command: |
+            if [ << pipeline.parameters.environment >> == "dev" ]; then \
+              export NEXT_ENV="staging"; \
+            elif [ << pipeline.parameters.environment >> == "staging" ]; then \
+              export NEXT_ENV="prod"; \
+            fi
+
+            export REQUEST_BODY=$(jq --null-input \
+            --arg branch "<< pipeline.git.branch >>" \
+            --arg environment "$NEXT_ENV" \
+            --arg release "<< pipeline.parameters.release >>" \
+            --arg app_name "<< pipeline.parameters.app_name >>" \
+            '{"branch":$branch,"parameters":{"environment":$environment,"release":$release,"app_name":$app_name}}')
+
+            curl --request POST --url https://circleci.com/api/v2/project/gh/jtreutel/${CIRCLE_PROJECT_REPONAME}/pipeline --header "Circle-Token: $CIRCLE_TOKEN" --header "content-type: application/json" --data "$REQUEST_BODY"
+
+workflows:
+  deploy-and-promote:
+    when:
+      or:
+        - equal: [ dev, << pipeline.parameters.environment >> ]
+        - equal: [ staging, << pipeline.parameters.environment >> ]
+    jobs:
+      - setup-aws-cli:
+          name: << pipeline.parameters.app_name >> << pipeline.parameters.environment >> Setup AWS CLI
+          context: empty-context
+      - run-deployment:
+          name: << pipeline.parameters.app_name >> << pipeline.parameters.environment >> Run Deployment
+          context: test-<< pipeline.parameters.environment >>-vars
+          requires:
+            - << pipeline.parameters.app_name >> << pipeline.parameters.environment >> Setup AWS CLI
+      #- manual-approval
+      - promote:
+          name: << pipeline.parameters.app_name >> << pipeline.parameters.environment >> Promote to Next Environment
+          context: test-<< pipeline.parameters.environment >>-vars
+          requires:
+            - << pipeline.parameters.app_name >> << pipeline.parameters.environment >> Run Deployment
+  deploy-only:
+    when:
+      or:
+        - equal: [ prod, << pipeline.parameters.environment >> ]
+        - equal: [ true, << pipeline.parameters.no_promotion >> ]
+    jobs:
+      - setup-aws-cli:
+          name: << pipeline.parameters.app_name >> << pipeline.parameters.environment >> Setup AWS CLI
+          context: empty-context
+      - hold:
+          name: Manual approval required to deploy << pipeline.parameters.app_name >> to << pipeline.parameters.environment >>
+          type: approval
+          requires:
+            - << pipeline.parameters.app_name >> << pipeline.parameters.environment >> Setup AWS CLI
+      - run-deployment:
+          name: << pipeline.parameters.app_name >> << pipeline.parameters.environment >> Run Deployment
+          context: test-<< pipeline.parameters.environment >>-vars
+          requires:
+            - Manual approval required to deploy << pipeline.parameters.app_name >> to << pipeline.parameters.environment >>
