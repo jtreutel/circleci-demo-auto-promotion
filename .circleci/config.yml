@@ -108,3 +108,5 @@ workflows:
           context: test-<< pipeline.parameters.environment >>-vars
           requires:
             - Manual approval required to deploy << pipeline.parameters.app_name >> to << pipeline.parameters.environment >>
+
+# VS Code Extension Version: 1.4.0
